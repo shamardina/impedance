@@ -31,7 +31,7 @@ for i in xrange(0, len(Js)):
     exper.update({"forJ"      : Js[i],
                   "jfix"      : Js[i]})
     fuel_cell = st.FCSimple(param, exper)
-    impedance = tr.ImpCCLFastO2(fuel_cell, default_channels)
+    impedance = tr.ImpCCLFastO2(fuel_cell, default_channels, num_method=1)
     filename = "results/I%.2f/new-transient-fitting-lambda%.2f.h5" % (Js[i]/scale, lams[i])
     r_calc = impedance.read_experiment("data/%.1fA-%dml.dat" % (Is[i], int(flows[i])), area, scale)
     impedance.freq_v = impedance.exp_freq_v

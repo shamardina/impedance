@@ -9,7 +9,7 @@ import cmath
 import tables
 import stationarylib as st
 
-default_channels = 100
+default_channels = 1000
 
 def leastsqFC(func, fit, rest={}):
     """leastsq-wrapper. Arguments: residuals function, fitting
@@ -17,7 +17,7 @@ def leastsqFC(func, fit, rest={}):
     parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, Cdl, lambda_eff."""
     kk = fit.keys()
     kk.extend(rest.keys())
-    keys = ['b', 'j_0', 'R_Ohm', 'sigma_t', 'D_O_GDL', 'Cdl', 'lambda_eff']
+    keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
     if sorted(kk) != sorted(keys):
         print sorted(kk)
         print sorted(keys)
@@ -51,27 +51,34 @@ def diffII(X, Y):
         dII[i-1] = (dI[i-1] - dI[i])/eps
     return dII
 
+def RK_step(function, nz, y, step):
+    """Discrete Runge–Kutta method step for a linear function. function should return coefficients."""
+    half_step = step/2.0
+    coef = function(nz)
+    k1 = coef[0] + coef[1]*y
+    coef = function(nz + 1)
+    k2 = coef[0] + coef[1]*(y + half_step*k1)
+    k3 = coef[0] + coef[1]*(y + half_step*k2)
+    coef = function(nz + 2)
+    k4 = coef[0] + coef[1]*(y + step*k3)
+    return y + step/6.0*(k1 + 2.0*k2 + 2.0*k3 + k4)
+
 
 class Impedance(object):
     """Class for EIS simulations"""
-    
+
     def __init__(self, fc, channels=default_channels):
         self.fc = fc
         self.stationary = None
-        self.find_mesh(channels)
+        self.channels = channels
+        self.n_z_mesh = [1.0*z/channels for z in xrange(0, channels+1)]
         self.Z_v = []
         self.freq_v = []
         self.exp_Z_v = []
         self.exp_freq_v = []
 
-    def Ztotal_all(self):
+    def _Ztotal_all(self):
         raise RuntimeError("should be implemented in child class")
-
-    def find_mesh(self, channels=default_channels):
-        self.channels = channels
-        self.nodes = channels + 1
-        self.z_step = 1.0/channels
-        self.n_z_mesh = [1.0*z/channels for z in xrange(0, channels+1)]
 
     def read_results(self, h5, prefix=""):
         # TODO: check it! compare to stationarylib
@@ -82,7 +89,8 @@ class Impedance(object):
         Z1 = res.Z_1_v
         Z2 = res.Z_2_v
         self.Z_v = [Z1[i] - 1j*Z2[i] for i in xrange(0, len(Z1))]
-        self.find_mesh(res._v_attrs.channels)
+        self.channels = res._v_attrs.channels
+        self.n_z_mesh = [1.0*z/self.channels for z in xrange(0, self.channels + 1)]
 
     def dump_results(self, h5, prefix=""):
         if self.stationary.eta_v is None:
@@ -94,7 +102,7 @@ class Impedance(object):
         gr = h5.create_group("/", results, "Impedance %s results" % method)
         double_atom = tables.Float64Atom()
         gr._v_attrs.channels = self.channels
-        gr._v_attrs.current = self.fc.exper['forJ']
+        gr._v_attrs.current = self.fc.exper["forJ"]
         a = h5.create_array("/%s" % results, "freq_v", atom=double_atom, shape=(len(self.freq_v),),
                             title="Frequencies f in %s EIS." % method)
         a[:] = self.freq_v[:]
@@ -124,32 +132,35 @@ class Impedance(object):
 
     def normZ(self, Z, factor=None):
         if factor is None:
-            factor = self.fc.fit['sigma_t']/self.fc.param['l_t']
+            factor = self.fc.fit["sigma_t"]/self.fc.param["l_t"]
         return [z*factor for z in Z]
 
     def normJZ(self, Z, factor=None):
         if factor is None:
-            factor = self.fc.exper['forJ']/self.fc.fit['b']
+            factor = self.fc.exper["forJ"]/self.fc.fit["b"]
         return self.normZ(Z, factor)
 
-    def read_experiment(self, fn, area, scale=10000.0):
+    def read_experiment(self, fn, area, scale=10000.0, start=0):
         """Returns intersection."""
-        lines = [line.strip('\n').split("\t") for line in list(open(fn))[1:]]
+        lines = [line.strip("\n").split("\t") for line in list(open(fn))[1:]]
         expZ1 = [float(line[2])*area/scale for line in lines]
         expZ2 = [float(line[3])*area/scale for line in lines]
-        self.exp_freq_v = [float(line[1]) for line in lines]
-        # TODO: replace with a loop
-        self.exp_Z_v = [(expZ1[i] - 1j*expZ2[i])
-                        for i in xrange(0, len(self.exp_freq_v)) if expZ2[i] > 0]
-        num = len(self.exp_freq_v) - len(self.exp_Z_v)
-        self.exp_freq_v = self.exp_freq_v[num:]
-        return (expZ1[num-1] + (expZ1[num] - expZ1[num-1])/(1.0 - expZ2[num]/expZ2[num-1]))
+        exp_freq_v = [float(line[1]) for line in lines]
+        num = 0
+        for i in xrange(0, len(exp_freq_v)):
+            if expZ2[i] > 0:
+                num = i
+                break
+        i0 = max(num, start)
+        self.exp_freq_v = exp_freq_v[i0:]
+        self.exp_Z_v = [(expZ1[i] - 1j*expZ2[i]) for i in xrange(0, len(exp_freq_v))][i0:]
+        return expZ1[num-1] + (expZ1[num] - expZ1[num-1])/(1.0 - expZ2[num]/expZ2[num-1])
 
     def f_from_Omega(self, Omega_v):
-        return [om*self.fc.fit['sigma_t']/2.0/np.pi/self.fc.fit['Cdl']/self.fc.param['l_t']**2 for om in Omega_v]
+        return [om*self.fc.fit["sigma_t"]/2.0/np.pi/self.fc.fit["Cdl"]/self.fc.param["l_t"]**2 for om in Omega_v]
 
     def Omega_from_f(self, freq_v):
-        return [2.0*np.pi*f*self.fc.fit['Cdl']*self.fc.param['l_t']**2/self.fc.fit['sigma_t'] for f in freq_v]
+        return [2.0*np.pi*f*self.fc.fit["Cdl"]*self.fc.param["l_t"]**2/self.fc.fit["sigma_t"] for f in freq_v]
 
     def dump_results_dat(self, dat):
         console_stdout = sys.stdout
@@ -158,31 +169,38 @@ class Impedance(object):
         Z = self.Z_v
         nZ = self.normZ(Z)
         nJnZ = self.normJZ(Z)
-        print "#" + "\t".join('Omega', 'nZ1*nJ', 'nZ2*nJ', 'f', 'Z1', 'Z2', 'nZ1', 'nZ2')
+        print "#" + "\t".join("Omega", "nZ1*nJ", "nZ2*nJ", "f", "Z1", "Z2", "nZ1", "nZ2")
         for i in xrange(0, len(self.Z_v)):
             print "\t".join("%.6f" % x for x in (Omega[i], nJnZ[i].real, -nJnZ[i].imag, self.freq_v[i], Z[i].real, -Z[i].imag, nZ[i].real, -nZ[i].imag))
         sys.stdout.close()
         sys.stdout = console_stdout
 
     def model_fit(self, new_fit):
-        self.fc.fit.update(new_fit)
-        self.fc.exper['lambdafix'] = new_fit['lambda_eff']/self.fc.exper['jfix']*self.fc.exper['forJ']
+        self.update_param(new_fit)
+        self.Omega_v = self.Omega_from_f(self.freq_v)
+        return self._Ztotal_all()
+
+    def model_calc(self, new_fit):
+        self.update_param(new_fit)
+        return self._Ztotal_all()
+
+    def update_param(self, fit):
+        self.fc.fit.update(fit)
+        self.fc.exper["lambdafix"] = fit["lambda_eff"]/self.fc.exper["jfix"]*self.fc.exper["forJ"]
         self.fc.find_vars()
         self.fc.find_params()
-        self.Omega_v = self.Omega_from_f(self.freq_v)
-        return self.Ztotal_all()
 
     def param_parse(self, init, rest={}):
         """The order of parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, Cdl, lambda_eff."""
         arr_init = list(init)
-        keys = ['b', 'j_0', 'R_Ohm', 'sigma_t', 'D_O_GDL', 'Cdl', 'lambda_eff']
+        keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
         rc = {}
         rc.update(rest)
         for k in keys:
             if k not in rc:
                 rc[k] = arr_init.pop(0)
         return rc
-    
+
     def residuals(self, init, rest={}):
         pp = self.param_parse(init, rest)
         ll = len(self.exp_freq_v)
@@ -206,48 +224,152 @@ class Impedance(object):
 
 class ImpCCLFastO2(Impedance):
     """Impedance class descendant for EIS with account of CCL with fast oxygen transport. Small perturbations approach."""
-    
-    def __init__(self, fc, channels=default_channels, Omega_v=[]):
-        Impedance.__init__(self, fc, channels)
-        self.stationary = st.Tafel(fc, channels)
-        self.Omega_v = Omega_v
 
-    def n_Ztotal(self, Omega, j0, c10):
+    def __init__(self, fc, channels=default_channels, Omega_v=[], num_method=0):
+        """0 - finite-difference, 1 - Runge--Kutta"""
+        Impedance.__init__(self, fc, channels)
+        if num_method == 1:
+            self.stationary = st.Tafel(fc, channels*2)
+        else:
+            self.stationary = st.Tafel(fc, channels)
+        self.num_method = num_method
+        self.Omega_v = Omega_v
+        self.y_v = []
+
+    def _n_Ztotal(self, Omega, j0, c10):
         fc = self.fc
-        z_step = self.z_step
+        z_step = 1.0/self.channels
         phi = [-j - 1j*Omega for j in j0]
-        psi = cmath.sqrt(-1j*Omega/fc.express['nD_d'])
-        nlJfix = fc.express['lJfix']/fc.express['j_ref']
-        lbmupsi = self.fc.express['nl_d']*self.fc.express['mu']*psi
+        psi = cmath.sqrt(-1j*Omega/fc.express["nD_d"])
+        nlJfix = fc.express["lJfix"]/fc.express["j_ref"]
+        lbmupsi = self.fc.express["nl_d"]*self.fc.express["mu"]*psi
         sqrtphi = [cmath.sqrt(phii) for phii in phi]
-        y_v = [0.0]*self.nodes
-        c11peta = [0.0]*self.nodes
+        sinlbmupsi = cmath.sin(lbmupsi)
+        coslbmupsi = cmath.cos(lbmupsi)
+        tanlbmupsi = cmath.tan(lbmupsi)
+        y_v = [0.0]*(self.channels + 1)
+        def function_rhs_ch(k):
+            # all expressions below found in maxima:
+            sinsqrtphi = cmath.sin(sqrtphi[k])
+            ABcommon = fc.express["nD_d"]*fc.express["mu"]*sinsqrtphi*sqrtphi[k]*psi/(j0[k]*sinsqrtphi*sqrtphi[k]*sinlbmupsi + c10[k]*fc.express["nD_d"]*fc.express["mu"]*phi[k]*psi*coslbmupsi)
+            A = c10[k]*phi[k]*ABcommon
+            B = -j0[k]*ABcommon/coslbmupsi+fc.express["nD_d"]*fc.express["mu"]*psi*tanlbmupsi
+            return (A/nlJfix, (B - 1j*fc.express["xi2epsilon2"]*Omega)/nlJfix)
+        c11peta = [0.0]*(self.channels + 1)
         # TODO: upload maxima script
         # found in maxima:
-        c11peta[0] = (cmath.sin(sqrtphi[0])*sqrtphi[0]*c10[0]*phi[0]*cmath.sin(lbmupsi))/(cmath.cos(lbmupsi)*(j0[0]*cmath.sin(sqrtphi[0])*sqrtphi[0]*cmath.tan(lbmupsi)+c10[0]*fc.express['nD_d']*fc.express['mu']*phi[0]*psi))
-        Zloc = [0.0]*self.nodes
+        c11peta[0] = (cmath.sin(sqrtphi[0])*sqrtphi[0]*c10[0]*phi[0]*sinlbmupsi)/(coslbmupsi*(j0[0]*cmath.sin(sqrtphi[0])*sqrtphi[0]*tanlbmupsi + c10[0]*fc.express["nD_d"]*fc.express["mu"]*phi[0]*psi))
+        Zloc = [0.0]*(self.channels + 1)
         # found in maxima:
         Zloc[0] = -1.0/(cmath.sin(sqrtphi[0])*sqrtphi[0]*((c10[0]*phi[0])/(c11peta[0]*j0[0])-1.0)) - cmath.cos(sqrtphi[0])/(cmath.sin(sqrtphi[0])*sqrtphi[0])
         invZtotal = 1.0/Zloc[0]
-        for i in xrange(1, self.nodes):
+        for i in xrange(1, self.channels + 1):
+            if self.num_method == 1: # Runge--Kutta method
+                y_v[i] = RK_step(function_rhs_ch, (i-1)*2, y_v[i-1], z_step)
+                ii = i*2
+            else: # finite-difference method
+                coef = function_rhs_ch(i)
+                y_v[i] = (y_v[i-1] + coef[0]*z_step)/(1.0 - z_step*coef[1])
+                ii = i
             # all expressions below found in maxima:
-            ABcommon = fc.express['nD_d']*fc.express['mu']*cmath.sin(sqrtphi[i])*sqrtphi[i]*psi/(j0[i]*cmath.sin(sqrtphi[i])*sqrtphi[i]*cmath.sin(lbmupsi)+c10[i]*fc.express['nD_d']*fc.express['mu']*phi[i]*psi*cmath.cos(lbmupsi))
-            A = c10[i]*phi[i]*ABcommon
-            B = -j0[i]*ABcommon/cmath.cos(lbmupsi)+fc.express['nD_d']*fc.express['mu']*psi*cmath.tan(lbmupsi)
-            y_v[i] = (y_v[i-1] + A*self.z_step/nlJfix)/(1.0 + self.z_step/nlJfix*(1j*fc.express['xi2epsilon2']*Omega - B))
-            c11peta[i] = y_v[i]/cmath.cos(lbmupsi) - (cmath.sin(sqrtphi[i])*sqrtphi[i]*(y_v[i]*j0[i]/cmath.cos(lbmupsi) - c10[i]*phi[i])*cmath.sin(lbmupsi))/(cmath.cos(lbmupsi)*(j0[i]*cmath.sin(sqrtphi[i])*sqrtphi[i]*cmath.tan(lbmupsi) + c10[i]*fc.express['nD_d']*fc.express['mu']*phi[i]*psi))
-            Zloc[i] = -1.0/(cmath.sin(sqrtphi[i])*sqrtphi[i]*((c10[i]*phi[i])/(c11peta[i]*j0[i]) - 1.0))-cmath.cos(sqrtphi[i])/(cmath.sin(sqrtphi[i])*sqrtphi[i])
+            c11peta[i] = y_v[i]/coslbmupsi - (cmath.sin(sqrtphi[ii])*sqrtphi[ii]*(y_v[i]*j0[ii]/coslbmupsi - c10[ii]*phi[ii])*sinlbmupsi)/(coslbmupsi*(j0[ii]*cmath.sin(sqrtphi[ii])*sqrtphi[ii]*tanlbmupsi + c10[ii]*fc.express["nD_d"]*fc.express["mu"]*phi[ii]*psi))
+            Zloc[i] = -1.0/(cmath.sin(sqrtphi[ii])*sqrtphi[ii]*((c10[ii]*phi[ii])/(c11peta[i]*j0[ii]) - 1.0)) - cmath.cos(sqrtphi[ii])/(cmath.sin(sqrtphi[ii])*sqrtphi[ii])
             invZtotal += 1.0/Zloc[i]
         invZtotal = invZtotal*z_step - (1.0/Zloc[0]+1.0/Zloc[-1])*z_step/2.0
+        self.y_v = y_v[:]
         return 1.0/invZtotal
-    
-    def Ztotal_all(self):
+
+    def _Ztotal_all(self):
+        eta, j0, c10 = self.stationary_values()
+        n_Ztotal_v = [self._n_Ztotal(Omega, j0, c10) for Omega in self.Omega_v]
+        self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
+        return self.Z_v
+
+    def y_all(self, Omegas, fit=None):
+        if fit:
+            self.update_param(fit)
+        else:
+            self.update_param(self.fc.fit)
+        eta, j0, c10 = self.stationary_values()
+        rc = {}
+        for om in Omegas:
+            Z = self._n_Ztotal(om, j0, c10)
+            rc[om] = self.y_v
+        return rc
+
+    def stationary_values(self):
+        print len(self.stationary.n_z_mesh)
         eta = self.stationary.eta()
         if eta is None:
             return None
-        self.stationary.profiles(eta/self.fc.fit['b'])
-        j0 = [a/self.fc.express['j_ref'] for a in self.stationary.j_v]
-        c10 = [c/self.fc.exper['c_ref'] for c in self.stationary.c_t_v]
-        n_Ztotal_v = [self.n_Ztotal(Omega, j0, c10) for Omega in self.Omega_v]
-        self.Z_v = [self.fc.fit['R_Ohm']+n_z*self.fc.param['l_t']/self.fc.fit['sigma_t'] for n_z in n_Ztotal_v]
-        return self.Z_v
+        j0 = [self.stationary.j_profile(nz)/self.fc.express["j_ref"] for nz in self.stationary.n_z_mesh] #self.n_z_mesh]
+        c10 = [self.stationary.c_t_profile(nz)/self.fc.exper["c_ref"] for nz in self.stationary.n_z_mesh] #self.n_z_mesh]
+        return eta, j0, c10
+
+
+def main():
+    scale = 10000.0
+    import parameters as p
+    exper = {"gas_O"     : p.gas_O,
+             "T"         : p.T,
+             "R"         : p.R,
+             "F"         : p.F,
+             "c_ref"     : p.c_ref,
+             "forJ"      : 600.0,
+             "jfix"      : 600.0,
+             "lambdafix" : 3.0}
+
+    param = {"h"     : p.h,
+             "l_d"   : p.l_d,
+             "sigma" : p.sigma,
+             "l_t"   : p.l_t,
+             "l_m"   : p.l_m}
+    fuel_cell = st.FCSimple(param, exper)
+    fuel_cell.fit = {"j_0"        : p.j_0,
+                     "R_Ohm"      : 0.000008,
+                     "b"          : p.b,
+                     "sigma_t"    : p.sigma_t,
+                     "Cdl"        : p.Cdl,
+                     "lambda_eff" : exper["lambdafix"],
+                     "D_O_GDL"    : p.D_O_GDL}
+    Omega_v = []
+    om = 1.0e-5
+    while om < 10.0:
+        om = 1.12*om
+        Omega_v.append(om)
+    impedance = ImpCCLFastO2(fuel_cell, default_channels)
+    impedance.Omega_v = Omega_v
+    found_Z = impedance.model_calc(impedance.fc.fit)
+    impedance.freq_v = impedance.f_from_Omega(impedance.Omega_v)
+    filename = "results/I%.2f/transient-lambda%.2f.h5" % (impedance.fc.exper["forJ"]/scale, impedance.fc.express["lam"])
+    with tables.open_file(filename, "w") as r:
+        impedance.dump_results(r, "found_")
+
+    from matplotlib import rc
+    import matplotlib.pyplot as plt
+    rc("font", **{"family":"sans-serif", "sans-serif":"Arial"})
+    rc("text", usetex=True)
+    rc("text.latex", unicode=True)
+    plt.ioff()
+    dim_x = (0.0, 2.0)
+    dim_y = (0.0, 1.0)
+    plot_width = 9
+    adjust = 0.2
+    plot_height = plot_width*(dim_y[1] - dim_y[0])/(dim_x[1] - dim_x[0]) + adjust
+    plt.clf()
+    fig = plt.figure(figsize=(plot_width, plot_height))
+    fontsize = 18
+    ax = fig.add_subplot(111)
+    plt.subplots_adjust(bottom=adjust)
+    label = u"$Z'$ / $\\Omega$ cm$^2$"
+    ax.set_xlabel(label, fontsize=fontsize)
+    label = u"$-Z''$ / $\\Omega$ cm$^2$"
+    ax.set_ylabel(label, fontsize=fontsize)
+    ax.plot([z.real*scale for z in impedance.Z_v], [-z.imag*scale for z in impedance.Z_v], color="red", linestyle="-", linewidth=1)
+    ax.axis("scaled")
+    ax.set_xlim(*dim_x)
+    ax.set_ylim(*dim_y)
+    fig.savefig("results/I%.2f/Nyquist%d.eps" % (impedance.fc.exper["forJ"]/scale, impedance.fc.express["lam"]))
+
+if __name__ == "__main__":
+    main()
