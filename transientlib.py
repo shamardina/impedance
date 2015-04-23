@@ -244,24 +244,27 @@ class ImpCCLFastO2(Impedance):
         nlJfix = fc.express["lJfix"]/fc.express["j_ref"]
         lbmupsi = self.fc.express["nl_d"]*self.fc.express["mu"]*psi
         sqrtphi = [cmath.sqrt(phii) for phii in phi]
+        sinsqrtphi = [cmath.sin(s) for s in sqrtphi]
         sinlbmupsi = cmath.sin(lbmupsi)
         coslbmupsi = cmath.cos(lbmupsi)
         tanlbmupsi = cmath.tan(lbmupsi)
         y_v = [0.0]*(self.channels + 1)
         def function_rhs_ch(k):
             # all expressions below found in maxima:
-            sinsqrtphi = cmath.sin(sqrtphi[k])
-            ABcommon = fc.express["nD_d"]*fc.express["mu"]*sinsqrtphi*sqrtphi[k]*psi/(j0[k]*sinsqrtphi*sqrtphi[k]*sinlbmupsi + c10[k]*fc.express["nD_d"]*fc.express["mu"]*phi[k]*psi*coslbmupsi)
+            ABcommon = fc.express["nD_d"]*fc.express["mu"]*sinsqrtphi[k]*sqrtphi[k]*psi/(j0[k]*sinsqrtphi[k]*sqrtphi[k]*sinlbmupsi +
+                    c10[k]*fc.express["nD_d"]*fc.express["mu"]*phi[k]*psi*coslbmupsi)
             A = c10[k]*phi[k]*ABcommon
             B = -j0[k]*ABcommon/coslbmupsi+fc.express["nD_d"]*fc.express["mu"]*psi*tanlbmupsi
             return (A/nlJfix, (B - 1j*fc.express["xi2epsilon2"]*Omega)/nlJfix)
         c11peta = [0.0]*(self.channels + 1)
         # TODO: upload maxima script
         # found in maxima:
-        c11peta[0] = (cmath.sin(sqrtphi[0])*sqrtphi[0]*c10[0]*phi[0]*sinlbmupsi)/(coslbmupsi*(j0[0]*cmath.sin(sqrtphi[0])*sqrtphi[0]*tanlbmupsi + c10[0]*fc.express["nD_d"]*fc.express["mu"]*phi[0]*psi))
+        c11peta[0] = (sinsqrtphi[0]*sqrtphi[0]*c10[0]*phi[0])/(j0[0]*sinsqrtphi[0]*sqrtphi[0] +
+                c10[0]*fc.express["nD_d"]*fc.express["mu"]*phi[0]*psi/tanlbmupsi)
         Zloc = [0.0]*(self.channels + 1)
         # found in maxima:
-        Zloc[0] = -1.0/(cmath.sin(sqrtphi[0])*sqrtphi[0]*((c10[0]*phi[0])/(c11peta[0]*j0[0])-1.0)) - cmath.cos(sqrtphi[0])/(cmath.sin(sqrtphi[0])*sqrtphi[0])
+        Zloc[0] = -1.0/(sinsqrtphi[0]*sqrtphi[0]*((c10[0]*phi[0])/(c11peta[0]*j0[0]) -
+                1.0)) - cmath.cos(sqrtphi[0])/(sinsqrtphi[0]*sqrtphi[0])
         invZtotal = 1.0/Zloc[0]
         for i in xrange(1, self.channels + 1):
             if self.num_method == 1: # Runge--Kutta method
@@ -272,8 +275,11 @@ class ImpCCLFastO2(Impedance):
                 y_v[i] = (y_v[i-1] + coef[0]*z_step)/(1.0 - z_step*coef[1])
                 ii = i
             # all expressions below found in maxima:
-            c11peta[i] = y_v[i]/coslbmupsi - (cmath.sin(sqrtphi[ii])*sqrtphi[ii]*(y_v[i]*j0[ii]/coslbmupsi - c10[ii]*phi[ii])*sinlbmupsi)/(coslbmupsi*(j0[ii]*cmath.sin(sqrtphi[ii])*sqrtphi[ii]*tanlbmupsi + c10[ii]*fc.express["nD_d"]*fc.express["mu"]*phi[ii]*psi))
-            Zloc[i] = -1.0/(cmath.sin(sqrtphi[ii])*sqrtphi[ii]*((c10[ii]*phi[ii])/(c11peta[i]*j0[ii]) - 1.0)) - cmath.cos(sqrtphi[ii])/(cmath.sin(sqrtphi[ii])*sqrtphi[ii])
+            c11peta[i] = y_v[i]/coslbmupsi - (sinsqrtphi[ii]*sqrtphi[ii]*(y_v[i]*j0[ii]/coslbmupsi -
+                    c10[ii]*phi[ii]))/(j0[ii]*sinsqrtphi[ii]*sqrtphi[ii] +
+                    c10[ii]*fc.express["nD_d"]*fc.express["mu"]*phi[ii]*psi/tanlbmupsi)
+            Zloc[i] = -1.0/(sinsqrtphi[ii]*sqrtphi[ii]*((c10[ii]*phi[ii])/(c11peta[i]*j0[ii]) -
+                1.0)) - cmath.cos(sqrtphi[ii])/(sinsqrtphi[ii]*sqrtphi[ii])
             invZtotal += 1.0/Zloc[i]
         invZtotal = invZtotal*z_step - (1.0/Zloc[0]+1.0/Zloc[-1])*z_step/2.0
         self.y_v = y_v[:]
@@ -337,7 +343,7 @@ def main():
     while om < 10.0:
         om = 1.12*om
         Omega_v.append(om)
-    impedance = ImpCCLFastO2(fuel_cell, default_channels)
+    impedance = ImpCCLFastO2(fuel_cell, default_channels, 0)
     impedance.Omega_v = Omega_v
     found_Z = impedance.model_calc(impedance.fc.fit)
     impedance.freq_v = impedance.f_from_Omega(impedance.Omega_v)
