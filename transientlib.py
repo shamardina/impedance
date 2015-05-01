@@ -93,9 +93,8 @@ class Impedance(object):
         self.n_z_mesh = [1.0*z/self.channels for z in xrange(0, self.channels + 1)]
 
     def dump_results(self, h5, prefix=""):
-        if self.stationary.eta_v is None:
-            return None
-        self.stationary.dump_results(h5, prefix)
+        if self.stationary.eta_v is not None:
+            self.stationary.dump_results(h5, prefix)
         self.fc.dump_vars(h5, prefix)
         method = self.__class__.__name__
         results = "%s_results" % (prefix+method)
@@ -235,6 +234,11 @@ class ImpCCLFastO2(Impedance):
         self.num_method = num_method
         self.Omega_v = Omega_v
         self.y_v = []
+        self.Zloc_v = []
+
+    def _n_Zccl(self, j0n=None, sqrtphin=None):
+        # found in maxima:
+        return -1.0/cmath.tan(sqrtphin)/sqrtphin
 
     def _n_Ztotal(self, Omega, j0, c10):
         fc = self.fc
@@ -264,7 +268,7 @@ class ImpCCLFastO2(Impedance):
         Zloc = [0.0]*(self.channels + 1)
         # found in maxima:
         Zloc[0] = -1.0/(sinsqrtphi[0]*sqrtphi[0]*((c10[0]*phi[0])/(c11peta[0]*j0[0]) -
-                1.0)) - cmath.cos(sqrtphi[0])/(sinsqrtphi[0]*sqrtphi[0])
+                1.0)) + self._n_Zccl(j0[0], sqrtphi[0])
         invZtotal = 1.0/Zloc[0]
         for i in xrange(1, self.channels + 1):
             if self.num_method == 1: # Runge--Kutta method
@@ -279,10 +283,11 @@ class ImpCCLFastO2(Impedance):
                     c10[ii]*phi[ii]))/(j0[ii]*sinsqrtphi[ii]*sqrtphi[ii] +
                     c10[ii]*fc.express["nD_d"]*fc.express["mu"]*phi[ii]*psi/tanlbmupsi)
             Zloc[i] = -1.0/(sinsqrtphi[ii]*sqrtphi[ii]*((c10[ii]*phi[ii])/(c11peta[i]*j0[ii]) -
-                1.0)) - cmath.cos(sqrtphi[ii])/(sinsqrtphi[ii]*sqrtphi[ii])
+                1.0)) + self._n_Zccl(j0[ii], sqrtphi[ii])
             invZtotal += 1.0/Zloc[i]
         invZtotal = invZtotal*z_step - (1.0/Zloc[0]+1.0/Zloc[-1])*z_step/2.0
-        self.y_v = y_v[:]
+        self.y_v = y_v
+        self.Zloc_v = Zloc
         return 1.0/invZtotal
 
     def _Ztotal_all(self):
@@ -303,14 +308,51 @@ class ImpCCLFastO2(Impedance):
             rc[om] = self.y_v
         return rc
 
+    def Z_loc(self, Omegas, nodes, fit=None):
+        if fit:
+            self.update_param(fit)
+        else:
+            self.update_param(self.fc.fit)
+        eta, j0, c10 = self.stationary_values()
+        rc = {x: [] for x in nodes}
+        for om in Omegas:
+            Z = self._n_Ztotal(om, j0, c10)
+            for i in nodes:
+                rc[i].append(self.Zloc_v[i]*self.fc.param["l_t"]/self.fc.fit["sigma_t"])
+        return rc
+
     def stationary_values(self):
         print len(self.stationary.n_z_mesh)
         eta = self.stationary.eta()
         if eta is None:
             return None
-        j0 = [self.stationary.j_profile(nz)/self.fc.express["j_ref"] for nz in self.stationary.n_z_mesh] #self.n_z_mesh]
-        c10 = [self.stationary.c_t_profile(nz)/self.fc.exper["c_ref"] for nz in self.stationary.n_z_mesh] #self.n_z_mesh]
+        j0 = [self.stationary.j_profile(nz)/self.fc.express["j_ref"] for nz in self.stationary.n_z_mesh]
+        c10 = [self.stationary.c_t_profile(nz)/self.fc.exper["c_ref"] for nz in self.stationary.n_z_mesh]
         return eta, j0, c10
+
+
+class ImpInfLambda(ImpCCLFastO2):
+    """Impedance class ImpCCLFastO2 descendant for EIS with account of CCL with fast oxygen transport in case of infinite lambda."""
+
+    def _n_Ztotal(self, Omega, nJ):
+        fc = self.fc
+        phi = -nJ - 1j*Omega
+        sqrtphi = cmath.sqrt(phi)
+        psi = cmath.sqrt(-1j*Omega/fc.express["nD_d"])
+        return -1.0/(sqrtphi*cmath.tan(sqrtphi)) - nJ*cmath.tan(fc.express["mu"]*fc.express["nl_d"]*cmath.tan(psi))/(fc.express["mu"]*psi*(fc.express["nD_d"] - nJ*fc.express["nl_d"])*phi)
+
+    def _Ztotal_all(self):
+        nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
+        n_Ztotal_v = [self._n_Ztotal(Omega, nJ) for Omega in self.Omega_v]
+        self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
+        return self.Z_v
+
+
+class ImpGDLCh(ImpCCLFastO2):
+    """Impedance class ImpCCLFastO2 descendant for the impedance of GDL and channel only."""
+
+    def _n_Zccl(self, j0n=None, sqrtphin=None):
+        return 1.0/3.0 + 1.0/j0n
 
 
 def main():
