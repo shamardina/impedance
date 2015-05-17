@@ -84,9 +84,9 @@ class Tafel(object):
 class FCSimple(object):
     """A simple class for FC. Defines or calculates the FC parameters."""
 
-    def __init__(self, param={}, exper={}):
-        self.param = param.copy()
-        self.exper = exper.copy()
+    def __init__(self, param=None, exper=None):
+        self.param = {} if param is None else param.copy()
+        self.exper = {} if exper is None else exper.copy()
         self.fit = {}
         self.express = {}
 

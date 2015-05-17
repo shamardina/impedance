@@ -11,10 +11,11 @@ import stationarylib as st
 
 default_channels = 1000
 
-def leastsqFC(func, fit, rest={}):
+def leastsqFC(func, fit, rest=None):
     """leastsq-wrapper. Arguments: residuals function, fitting
     parameters (dict), other parameters (dict). The order of
     parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, Cdl, lambda_eff."""
+    if rest is None: rest = {}
     kk = fit.keys()
     kk.extend(rest.keys())
     keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
@@ -161,6 +162,14 @@ class Impedance(object):
     def Omega_from_f(self, freq_v):
         return [2.0*np.pi*f*self.fc.fit["Cdl"]*self.fc.param["l_t"]**2/self.fc.fit["sigma_t"] for f in freq_v]
 
+    def discrete_Omega(self, freq_1, freq_2, step=1.12):
+        Omega_v = []
+        om = self.Omega_from_f([freq_1])[0]
+        while om < self.Omega_from_f([freq_2])[0]:
+            Omega_v.append(om)
+            om = step*om
+        return Omega_v
+
     def dump_results_dat(self, dat):
         console_stdout = sys.stdout
         sys.stdout = open(dat, "w", 0)
@@ -179,8 +188,10 @@ class Impedance(object):
         self.Omega_v = self.Omega_from_f(self.freq_v)
         return self._Ztotal_all()
 
-    def model_calc(self, new_fit):
+    def model_calc(self, new_fit, expOm=0):
         self.update_param(new_fit)
+        if expOm:
+            self.Omega_v = self.discrete_Omega(self.exp_freq_v[-1], self.exp_freq_v[0])
         return self._Ztotal_all()
 
     def update_param(self, fit):
@@ -189,8 +200,9 @@ class Impedance(object):
         self.fc.find_vars()
         self.fc.find_params()
 
-    def param_parse(self, init, rest={}):
+    def param_parse(self, init, rest=None):
         """The order of parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, Cdl, lambda_eff."""
+        if rest is None: rest = {}
         arr_init = list(init)
         keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
         rc = {}
@@ -200,7 +212,7 @@ class Impedance(object):
                 rc[k] = arr_init.pop(0)
         return rc
 
-    def residuals(self, init, rest={}):
+    def residuals(self, init, rest=None):
         pp = self.param_parse(init, rest)
         ll = len(self.exp_freq_v)
         for p in pp.values():
