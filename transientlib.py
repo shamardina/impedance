@@ -8,6 +8,7 @@ import math
 import cmath
 import tables
 import stationarylib as st
+from parameters import eff_zero, eff_inf
 
 default_channels = 1000
 
@@ -217,14 +218,14 @@ class Impedance(object):
         ll = len(self.exp_freq_v)
         for p in pp.values():
             if p <= 0.0 or math.isnan(p):
-                return [10.0**10]*ll
+                return [eff_inf]*ll
         try:
             fit_v = self.model_fit(pp)
         except:
             print sys.exc_info()[0]
-            return [10.0**10]*ll
+            return [eff_inf]*ll
         if fit_v is None:
-            return [10.0**10]*ll
+            return [eff_inf]*ll
         # TODO: weight (real and imaginary parts individually)? diff = [(self.Z_v[i] - self.exp_Z_v[i])/self.exp_Z_v[i] for i in xrange(0, ll)] ???
         diff = [(self.Z_v[i] - self.exp_Z_v[i]) for i in xrange(0, ll)]
         z1d = [0]*2*ll
@@ -279,8 +280,10 @@ class ImpCCLFastO2(Impedance):
                 c10[0]*fc.express["nD_d"]*fc.express["mu"]*phi[0]*psi/tanlbmupsi)
         Zloc = [0.0]*(self.channels + 1)
         # found in maxima:
-        Zloc[0] = -1.0/(sinsqrtphi[0]*sqrtphi[0]*((c10[0]*phi[0])/(c11peta[0]*j0[0]) -
-                1.0)) + self._n_Zccl(j0[0], sqrtphi[0])
+        denominator = sinsqrtphi[0]*sqrtphi[0]*((c10[0]*phi[0])/(c11peta[0]*j0[0]) - 1.0)
+        if denominator == 0.0:
+            denominator = eff_zero
+        Zloc[0] = -1.0 / denominator + self._n_Zccl(j0[0], sqrtphi[0])
         invZtotal = 1.0/Zloc[0]
         for i in xrange(1, self.channels + 1):
             if self.num_method == 1: # Runge--Kutta method
@@ -294,8 +297,10 @@ class ImpCCLFastO2(Impedance):
             c11peta[i] = y_v[i]/coslbmupsi - (sinsqrtphi[ii]*sqrtphi[ii]*(y_v[i]*j0[ii]/coslbmupsi -
                     c10[ii]*phi[ii]))/(j0[ii]*sinsqrtphi[ii]*sqrtphi[ii] +
                     c10[ii]*fc.express["nD_d"]*fc.express["mu"]*phi[ii]*psi/tanlbmupsi)
-            Zloc[i] = -1.0/(sinsqrtphi[ii]*sqrtphi[ii]*((c10[ii]*phi[ii])/(c11peta[i]*j0[ii]) -
-                1.0)) + self._n_Zccl(j0[ii], sqrtphi[ii])
+            denominator = sinsqrtphi[ii]*sqrtphi[ii]*((c10[ii]*phi[ii])/(c11peta[i]*j0[ii]) - 1.0)
+            if denominator == 0.0:
+                denominator = eff_zero
+            Zloc[i] = -1.0 / denominator + self._n_Zccl(j0[ii], sqrtphi[ii])
             invZtotal += 1.0/Zloc[i]
         invZtotal = invZtotal*z_step - (1.0/Zloc[0]+1.0/Zloc[-1])*z_step/2.0
         self.y_v = y_v

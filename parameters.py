@@ -4,6 +4,9 @@ Constants, parameters and experimental conditions of the fuel cell and
 experiment. Auxiliary functions for dependent parameters.
 """
 
+eff_zero = 1e-16
+eff_inf  = 1e+16
+
 R = 8.31                           # J/mol/K
 T_zero = 273.15                    # K
 T = T_zero + 160.0                 # K
