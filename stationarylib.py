@@ -151,3 +151,20 @@ class FCSimple(object):
         gr = h5.get_node("/%s" % (prefix+"performance"))
         for k in keys:
             self.fit[k] = getattr(gr._v_attrs, k)
+
+
+class FCCCL(FCSimple):
+    """A class for FC with finite oxygen transport in CCL."""
+
+    def find_vars(self):
+        FCSimple.find_vars(self)
+        self.express["nD_t"] = 4.0*self.exper["F"]*self.fit["D_t"]*self.exper["c_ref"]/self.fit["sigma_t"]/self.fit["b"]
+
+    def find_vvars(self):
+        FCSimple.find_vvars(self)
+        self.fit["D_t"] = self.express["nD_t"]*self.fit["sigma_t"]*self.fit["b"]/4.0/self.exper["F"]/self.exper["c_ref"]
+
+    def read_fit(self, h5, prefix=""):
+        FCSimple.read_fit(self, h5, prefix)
+        gr = h5.get_node("/%s" % (prefix+"performance"))
+        self.fit["D_t"] = gr._v_attrs.D_t
