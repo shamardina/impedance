@@ -250,6 +250,7 @@ class ImpCCLFastO2(Impedance):
         self.Zloc_v = []
 
     def _n_Zccl(self, j0n=None, sqrtphin=None):
+        """Returns the dimensionless local CCL impedance"""
         # found in maxima:
         return -1.0/cmath.tan(sqrtphin)/sqrtphin
 
@@ -352,11 +353,7 @@ class ImpInfLambda(ImpCCLFastO2):
     """Impedance class ImpCCLFastO2 descendant for EIS with account of CCL with fast oxygen transport in case of infinite lambda."""
 
     def _n_Ztotal(self, Omega, nJ):
-        fc = self.fc
-        phi = -nJ - 1j*Omega
-        sqrtphi = cmath.sqrt(phi)
-        psi = cmath.sqrt(-1j*Omega/fc.express["nD_d"])
-        return -1.0/(sqrtphi*cmath.tan(sqrtphi)) - nJ*cmath.tan(fc.express["mu"]*fc.express["nl_d"]*cmath.tan(psi))/(fc.express["mu"]*psi*(fc.express["nD_d"] - nJ*fc.express["nl_d"])*phi)
+        return self._n_Zccl(nJ, cmath.sqrt(-nJ - 1j*Omega)) + self._n_Zgdl(Omega, nJ, self.fc.express)
 
     def _Ztotal_all(self):
         nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
@@ -364,11 +361,28 @@ class ImpInfLambda(ImpCCLFastO2):
         self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
         return self.Z_v
 
+    def _n_Zgdl(self, Omega, nJ, params):
+        """Returns the dimensionless GDL+channel impedance"""
+        phi = -nJ - 1j*Omega
+        sqrtphi = cmath.sqrt(phi)
+        psi = cmath.sqrt(-1j*Omega/params["nD_d"])
+        return -nJ*cmath.tan(params["mu"]*params["nl_d"]*cmath.tan(psi))/(params["mu"]*psi*(params["nD_d"] - nJ*params["nl_d"])*phi)
+
+    def nZgdl_all(self, nJ=None, params=None):
+        if params is None:
+            self.fc.find_vars()
+            self.fc.find_params()
+            params =  self.fc.express.copy()
+        if nJ is None:
+            nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
+        return [self._n_Zgdl(Omega, nJ, params) for Omega in self.Omega_v]
+
 
 class ImpGDLCh(ImpCCLFastO2):
     """Impedance class ImpCCLFastO2 descendant for the impedance of GDL and channel only."""
 
     def _n_Zccl(self, j0n=None, sqrtphin=None):
+        """Returns the dimensionless local CCL impedance (DC limit)"""
         return 1.0/3.0 + 1.0/j0n
 
 
