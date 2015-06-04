@@ -362,11 +362,9 @@ class ImpInfLambda(ImpCCLFastO2):
         return self.Z_v
 
     def _n_Zgdl(self, Omega, nJ, params):
-        """Returns the dimensionless GDL+channel impedance"""
-        phi = -nJ - 1j*Omega
-        sqrtphi = cmath.sqrt(phi)
+        """Returns the dimensionless GDL impedance"""
         psi = cmath.sqrt(-1j*Omega/params["nD_d"])
-        return -nJ*cmath.tan(params["mu"]*params["nl_d"]*cmath.tan(psi))/(params["mu"]*psi*(params["nD_d"] - nJ*params["nl_d"])*phi)
+        return nJ*cmath.tan(params["mu"]*params["nl_d"]*psi)/(params["mu"]*psi*(params["nD_d"] - nJ*params["nl_d"])*(nJ + 1j*Omega))
 
     def nZgdl_all(self, nJ=None, params=None):
         if params is None:
@@ -376,6 +374,15 @@ class ImpInfLambda(ImpCCLFastO2):
         if nJ is None:
             nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
         return [self._n_Zgdl(Omega, nJ, params) for Omega in self.Omega_v]
+
+
+class ImpInfLambdaW(ImpInfLambda):
+    """Impedance class ImpInfLambda descendant for Warburg impedance of a GDL."""
+
+    def _n_Zgdl(self, Omega, nJ, params):
+        """Returns the dimensionless Warburg GDL impedance"""
+        psi = cmath.sqrt(-1j*Omega/params["nD_d"])
+        return cmath.tan(params["mu"]*params["nl_d"]*psi)/(params["mu"]*psi*(params["nD_d"] - nJ*params["nl_d"]))
 
 
 class ImpGDLCh(ImpCCLFastO2):
