@@ -11,26 +11,9 @@ import stationarylib as st
 from parameters import eff_zero, eff_inf
 
 default_channels = 1000
+default_keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lam_eff"]
+keys_K2015   = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "D_O_CCL", "Cdl", "lam_eff"]
 
-def leastsqFC(func, fit, rest=None):
-    """leastsq-wrapper. Arguments: residuals function, fitting
-    parameters (dict), other parameters (dict). The order of
-    parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, Cdl, lambda_eff."""
-    if rest is None: rest = {}
-    kk = fit.keys()
-    kk.extend(rest.keys())
-    keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
-    if sorted(kk) != sorted(keys):
-        print sorted(kk)
-        print sorted(keys)
-        raise ValueError("Inconsistent performance parameters")
-    initial = []
-    for k in keys:
-        if k in fit:
-            initial.append(fit[k])
-    init = tuple(initial)
-    # return leastsq(func, init, rest, full_output=True)
-    return leastsq(func, init, rest, full_output=False, xtol=1.49012e-16, ftol=1.49012e-16)
 
 def error(Z1, Z2):
     if not Z1 or not Z2:
@@ -71,16 +54,24 @@ class Impedance(object):
 
     def __init__(self, fc, channels=default_channels):
         self.fc = fc
+        self.fc.find_params()
         self.stationary = None
         self.channels = channels
         self.n_z_mesh = [1.0*z/channels for z in xrange(0, channels+1)]
         self.Z_v = []
         self.freq_v = []
+        self.Omega_v = []
         self.exp_Z_v = []
         self.exp_freq_v = []
 
     def _Ztotal_all(self):
-        raise RuntimeError("should be implemented in child class")
+        nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
+        n_Ztotal_v = [self._n_Ztotal(Omega, nJ) for Omega in self.Omega_v]
+        self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
+        return self.Z_v
+
+    def _n_Ztotal(self, Omega, nJ):
+        raise NotImplementedError("Should be implemented in child class.")
 
     def read_results(self, h5, prefix=""):
         # TODO: check it! compare to stationarylib
@@ -95,8 +86,6 @@ class Impedance(object):
         self.n_z_mesh = [1.0*z/self.channels for z in xrange(0, self.channels + 1)]
 
     def dump_results(self, h5, prefix=""):
-        if self.stationary.eta_v is not None:
-            self.stationary.dump_results(h5, prefix)
         self.fc.dump_vars(h5, prefix)
         method = self.__class__.__name__
         results = "%s_results" % (prefix+method)
@@ -197,15 +186,31 @@ class Impedance(object):
 
     def update_param(self, fit):
         self.fc.fit.update(fit)
-        self.fc.exper["lambdafix"] = fit["lambda_eff"]/self.fc.exper["jfix"]*self.fc.exper["forJ"]
         self.fc.find_vars()
-        self.fc.find_params()
 
-    def param_parse(self, init, rest=None):
-        """The order of parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, Cdl, lambda_eff."""
+    def param_parse(self, fit, rest, keys):
+        """The order of parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, D_O_CCL, Cdl, lam_eff.
+        fit and rest are dictionaries, returns a list of initial values in correct order."""
         if rest is None: rest = {}
+        kk = fit.keys()
+        kk.extend(rest.keys())
+        if sorted(kk) != sorted(keys):
+            print sorted(kk)
+            print sorted(keys)
+            raise ValueError("Inconsistent performance parameters")
+        initial = []
+        for k in keys:
+            if k in fit:
+                initial.append(fit[k])
+        return initial
+
+    def fit_parse(self, init, rest, keys):
+        """The order of parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, D_O_CCL, Cdl, lam_eff.
+        init is a list, rest is a dictionary, returns a full dictionary of performance parameters."""
+        if rest is None: rest = {}
+        if len(init)+len(rest) != len(keys):
+            raise ValueError("Inconsistent parameters number in performance results: %s + %s is not %s" % (len(init), len(rest), len(keys)))
         arr_init = list(init)
-        keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
         rc = {}
         rc.update(rest)
         for k in keys:
@@ -213,8 +218,8 @@ class Impedance(object):
                 rc[k] = arr_init.pop(0)
         return rc
 
-    def residuals(self, init, rest=None):
-        pp = self.param_parse(init, rest)
+    def residuals(self, init, rest, keys):
+        pp = self.fit_parse(init, rest, keys)
         ll = len(self.exp_freq_v)
         for p in pp.values():
             if p <= 0.0 or math.isnan(p):
@@ -233,11 +238,24 @@ class Impedance(object):
         z1d[1::2] = [z.imag for z in diff]
         return z1d
 
+    def leastsqFC(self, func, fit, rest=None, keys=default_keys):
+        """leastsq-wrapper. Arguments: residuals function, fitting
+        parameters (dict), other parameters (dict), keys (list) of the performance parameters dictionary.
+        The order of parameters: b, j_0, R_Ohm, sigma_t, D_O_GDL, D_O_CCL, Cdl, lam_eff."""
+        init = self.param_parse(fit, rest, keys)
+        # return leastsq(func, init, rest, full_output=True)
+        return leastsq(func, init, args=(rest, keys), full_output=False, xtol=1.49012e-16, ftol=1.49012e-16)
+
+    def _n_Zccl(self, j0n, sqrtphin):
+        """Returns the dimensionless local CCL impedance"""
+        # found in maxima:
+        return -1.0/cmath.tan(sqrtphin)/sqrtphin
+
 
 class ImpCCLFastO2(Impedance):
     """Impedance class descendant for EIS with account of CCL with fast oxygen transport. Small perturbations approach."""
 
-    def __init__(self, fc, channels=default_channels, Omega_v=[], num_method=0):
+    def __init__(self, fc, channels=default_channels, num_method=0):
         """0 - finite-difference, 1 - Runge--Kutta"""
         Impedance.__init__(self, fc, channels)
         if num_method == 1:
@@ -245,14 +263,8 @@ class ImpCCLFastO2(Impedance):
         else:
             self.stationary = st.Tafel(fc, channels)
         self.num_method = num_method
-        self.Omega_v = Omega_v
         self.y_v = []
         self.Zloc_v = []
-
-    def _n_Zccl(self, j0n=None, sqrtphin=None):
-        """Returns the dimensionless local CCL impedance"""
-        # found in maxima:
-        return -1.0/cmath.tan(sqrtphin)/sqrtphin
 
     def _n_Ztotal(self, Omega, j0, c10):
         fc = self.fc
@@ -309,7 +321,7 @@ class ImpCCLFastO2(Impedance):
         return 1.0/invZtotal
 
     def _Ztotal_all(self):
-        eta, j0, c10 = self.stationary_values()
+        j0, c10 = self.stationary_values()
         n_Ztotal_v = [self._n_Ztotal(Omega, j0, c10) for Omega in self.Omega_v]
         self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
         return self.Z_v
@@ -319,7 +331,7 @@ class ImpCCLFastO2(Impedance):
             self.update_param(fit)
         else:
             self.update_param(self.fc.fit)
-        eta, j0, c10 = self.stationary_values()
+        j0, c10 = self.stationary_values()
         rc = {}
         for om in Omegas:
             Z = self._n_Ztotal(om, j0, c10)
@@ -331,7 +343,7 @@ class ImpCCLFastO2(Impedance):
             self.update_param(fit)
         else:
             self.update_param(self.fc.fit)
-        eta, j0, c10 = self.stationary_values()
+        j0, c10 = self.stationary_values()
         rc = {x: [] for x in nodes}
         for om in Omegas:
             Z = self._n_Ztotal(om, j0, c10)
@@ -342,24 +354,28 @@ class ImpCCLFastO2(Impedance):
     def stationary_values(self):
         print len(self.stationary.n_z_mesh)
         eta = self.stationary.eta()
-        if eta is None:
-            return None
+        if eta is None: return None
         j0 = [self.stationary.j_profile(nz)/self.fc.express["j_ref"] for nz in self.stationary.n_z_mesh]
         c10 = [self.stationary.c_t_profile(nz)/self.fc.exper["c_ref"] for nz in self.stationary.n_z_mesh]
-        return eta, j0, c10
+        return j0, c10
+
+    def dump_results(self, h5, prefix=""):
+        self.stationary.dump_results(h5, prefix)
+        Impedance.dump_results(self, h5, prefix)
 
 
-class ImpInfLambda(ImpCCLFastO2):
-    """Impedance class ImpCCLFastO2 descendant for EIS with account of CCL with fast oxygen transport in case of infinite lambda."""
+#class ImpInfLambda(ImpCCLFastO2):
+class ImpInfLambda(Impedance):
+    """Impedance class descendant for EIS with account of CCL with fast oxygen transport in case of infinite lambda."""
 
     def _n_Ztotal(self, Omega, nJ):
         return self._n_Zccl(nJ, cmath.sqrt(-nJ - 1j*Omega)) + self._n_Zgdl(Omega, nJ, self.fc.express)
 
     def _Ztotal_all(self):
-        nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
-        n_Ztotal_v = [self._n_Ztotal(Omega, nJ) for Omega in self.Omega_v]
-        self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
-        return self.Z_v
+       nJ = self.fc.exper["forJ"]/self.fc.express["j_ref"]
+       n_Ztotal_v = [self._n_Ztotal(Omega, nJ) for Omega in self.Omega_v]
+       self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
+       return self.Z_v
 
     def _n_Zgdl(self, Omega, nJ, params):
         """Returns the dimensionless GDL impedance"""
@@ -376,34 +392,182 @@ class ImpInfLambda(ImpCCLFastO2):
         return [self._n_Zgdl(Omega, nJ, params) for Omega in self.Omega_v]
 
 
+class ImpInfLambdaWLike(ImpInfLambda):
+    """Impedance class ImpInfLambda descendant for Warburg-like impedance of a GDL."""
+
+    def _n_Zgdl(self, Omega, nJ, params):
+        """Returns the dimensionless Warburg-like GDL impedance"""
+        psi = cmath.sqrt(-1j*Omega/params["nD_d"])
+        return cmath.tan(params["mu"]*params["nl_d"]*psi)/(params["mu"]*psi*(params["nD_d"] - nJ*params["nl_d"]))
+
+
 class ImpInfLambdaW(ImpInfLambda):
     """Impedance class ImpInfLambda descendant for Warburg impedance of a GDL."""
 
     def _n_Zgdl(self, Omega, nJ, params):
         """Returns the dimensionless Warburg GDL impedance"""
-        psi = cmath.sqrt(-1j*Omega/params["nD_d"])
-        return cmath.tan(params["mu"]*params["nl_d"]*psi)/(params["mu"]*psi*(params["nD_d"] - nJ*params["nl_d"]))
+        return params["Rm"]*cmath.tanh(params["mu"]*params["nl_d"]*cmath.sqrt(1j*Omega/params['nD_d']))/cmath.sqrt(1j*Omega*params['nD_d'])
+#        return params["Rm"]*cmath.tan(params["mu"]*params["nl_d"]*cmath.sqrt(-1j*Omega/params['nD_d']))/cmath.sqrt(-1j*Omega*params['nD_d'])/params["mu"]
 
 
 class ImpGDLCh(ImpCCLFastO2):
     """Impedance class ImpCCLFastO2 descendant for the impedance of GDL and channel only."""
 
-    def _n_Zccl(self, j0n=None, sqrtphin=None):
+    def _n_Zccl(self, j0n, sqrtphin):
         """Returns the dimensionless local CCL impedance (DC limit)"""
         return 1.0/3.0 + 1.0/j0n
+
+
+class ImpInfLambdaK2015(Impedance):
+    """Impedance from A. A. Kulikovsky, Journal of the Electrochemical Society 162, F217 (2015). The implementation literally reproduces the paper."""
+    @staticmethod
+    def _p(Omega, c10, j0, Dt, mu2):
+        return (2.0*1j*Omega*c10*j0*(Dt*c10 - 1.0)*(Dt - mu2)
+                - Omega**2 * c10**2 * (Dt - mu2)**2
+                + j0**2 * (1.0 - Dt*c10)**2)
+
+    @staticmethod
+    def _t(Omega, c10, j0, Dt, mu2):
+        return (-Omega**2 * c10**2 * (mu2**2 + Dt**2)
+                + 2.0*Dt*Omega*c10**2 * (Omega*mu2 - 1j*j0*mu2 + 1j*Dt*j0)
+                + 2.0*1j*Omega*c10*j0*(mu2 - Dt)
+                + j0**2 * (1 + Dt*c10)**2)
+
+    @staticmethod
+    def _ym(Omega, c10, j0, Dt, mu2, loc_t):
+        return Dt*c10*(1j*Omega*c10*mu2 + 1j*Dt*Omega*c10
+                       + c10*j0*Dt + j0 - cmath.sqrt(loc_t))
+
+    @staticmethod
+    def _yp(Omega, c10, j0, Dt, mu2, loc_t):
+        return Dt*c10*(1j*Omega*c10*mu2 + 1j*Dt*Omega*c10
+                       + c10*j0*Dt + j0 + cmath.sqrt(loc_t))
+
+    @staticmethod
+    def _gsp(Omega, c10, c11, j0, Dt, mu2, loc_t, loc_yp):
+        return cmath.sqrt(2.0*loc_yp)*c11*(j0**2 * (Dt*c10 + 1.0)**2 -
+                                           Omega**2 * c10**2 * (Dt - mu2)**2 -
+                                           1j*Omega*c10*(Dt - mu2)*(cmath.sqrt(loc_t) + 2.0*j0 - 2.0*Dt*c10*j0) -
+                                           cmath.sqrt(loc_t)*j0*(Dt*c10 - 1.0))
+
+    @staticmethod
+    def _gsm(Omega, c10, c11, j0, Dt, mu2, loc_t, loc_ym):
+        return cmath.sqrt(2.0*loc_ym)*c11*(j0**2 * (Dt*c10 + 1.0)**2 -
+                                           Omega**2 * c10**2 * (Dt - mu2)**2 +
+                                           1j*Omega*c10*(Dt - mu2)*(cmath.sqrt(loc_t) - 2.0*j0 + 2.0*Dt*c10*j0) +
+                                           cmath.sqrt(loc_t)*j0*(Dt*c10 - 1.0))
+
+    @staticmethod
+    def _gcp(Omega, c10, j0, Dt, mu2, loc_t):
+        return -2.0*cmath.sqrt(loc_t)*c10*(1j*Omega*c10*(mu2 - Dt) +
+                                           j0*(1.0 - Dt*c10) +
+                                           cmath.sqrt(loc_t))
+
+    @staticmethod
+    def _gcm(Omega, c10, j0, Dt, mu2, loc_t):
+        return 2.0*cmath.sqrt(loc_t)*c10*(1j*Omega*c10*(mu2 - Dt) +
+                                           j0*(1.0 - Dt*c10) -
+                                           cmath.sqrt(loc_t))
+
+    @staticmethod
+    def _N11(Omega, c10, j0, Dt, loc_t, loc_ym, loc_yp, loc_gcm, loc_gcp, loc_gsm, loc_gsp):
+        twoDtc10 = 2.0*Dt*c10
+        return (2.0*cmath.sqrt(2.0*loc_t)*c10*j0*(cmath.sqrt(loc_ym)*cmath.sinh(cmath.sqrt(2.0*loc_ym)/twoDtc10) -
+                                                  cmath.sqrt(loc_yp)*cmath.sinh(cmath.sqrt(2.0*loc_yp)/twoDtc10))/
+                (loc_gcm*cmath.cosh(cmath.sqrt(2.0*loc_ym)/twoDtc10) +
+                 loc_gcp*cmath.cosh(cmath.sqrt(2.0*loc_yp)/twoDtc10) +
+                 loc_gsm*cmath.sinh(cmath.sqrt(2.0*loc_ym)/twoDtc10) +
+                 loc_gsp*cmath.sinh(cmath.sqrt(2.0*loc_yp)/twoDtc10)))
+
+    @staticmethod
+    def _bcs(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_ym, loc_yp):
+        return 2.0*j0*loc_ym*cmath.sqrt(loc_yp)*((1j*Omega*c10*(mu2 - Dt) +
+                                                 j0*(1.0 - Dt*c10))*cmath.sqrt(loc_t) + loc_t -
+                                                2.0*cmath.sqrt(loc_t)*Dt*c11*j0*N11)
+
+    @staticmethod
+    def _bsc(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_ym, loc_yp):
+        return -2.0*j0*loc_yp*cmath.sqrt(loc_ym)*((1j*Omega*c10*(mu2 - Dt) +
+                                                 j0*(1.0 - Dt*c10))*cmath.sqrt(loc_t) - loc_t -
+                                                2.0*cmath.sqrt(loc_t)*Dt*c11*j0*N11)
+
+    @staticmethod
+    def _q(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_p, loc_ym, loc_yp):
+        return -2.0*Dt*cmath.sqrt(2.0*loc_yp*loc_ym)*((loc_p - loc_t)*c10*j0 +
+                                                     (2.0*Dt*c10*j0**2 +
+                                                      loc_p - loc_t)*(j0*(1.0 - Dt*c10) +
+                                                              1j*Omega*c10*(mu2 - Dt))*c11*N11)
+
+    @staticmethod
+    def _alss(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_p, loc_ym, loc_yp):
+        return math.sqrt(2.0)*Dt*c10*j0*(-(loc_ym + loc_yp)*(loc_p - loc_t) +
+                                         2.0*((1j*Omega*c10*mu2 - j0*Dt*c10 -
+                                               1j*Omega*Dt*c10 + j0)*(loc_ym + loc_yp) -
+                                              (loc_ym - loc_yp)*cmath.sqrt(loc_t))*N11*Dt*c11*j0)
+
+    @staticmethod
+    def _alcc(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_p, loc_ym, loc_yp):
+        return 2.0*cmath.sqrt(2.0*loc_yp*loc_ym)*Dt*c10*j0*(loc_p + loc_t -
+                                                            2.0*1j*(1j*Dt*c10*j0 +
+                                                                    Omega*c10*mu2 -
+                                                                    Dt*Omega*c10 -
+                                                                    1j*j0)*N11*Dt*c11*j0)
+    @staticmethod
+    def _c11(Omega, Dd, mu, ld):
+        # N11 = 1.0
+        return (-(1.0 + 1j)/(mu*math.sqrt(2.0*Dd*Omega))*
+                cmath.tan((1.0 - 1j)*mu*ld*math.sqrt(Omega)/math.sqrt(2.0*Dd)))
+
+    @staticmethod
+    def _n_Z(Omega, c10, Dt, loc_q, loc_ym, loc_yp, loc_alcc, loc_alss, loc_bsc, loc_bcs):
+        arg1 = cmath.sqrt(2.0*loc_yp)/2.0/Dt/c10
+        arg2 = cmath.sqrt(2.0*loc_ym)/2.0/Dt/c10
+        return ((loc_alcc*cmath.cosh(arg1)*cmath.cosh(arg2) +
+                 loc_alss*cmath.sinh(arg1)*cmath.sinh(arg2) + loc_q)/
+                (loc_bsc*cmath.sinh(arg1)*cmath.cosh(arg2) +
+                 loc_bcs*cmath.cosh(arg1)*cmath.sinh(arg2)))
+
+    def _n_Ztotal(self, Omega, j0, c10):
+        Dt = self.fc.express["nD_t"]
+        Dd = self.fc.express["nD_d"]
+        mu = self.fc.express["mu"]
+        mu2 = self.fc.express["mu2"]
+        ld = self.fc.express["nl_d"]
+        loc_p = self._p(Omega, c10, j0, Dt, mu2)
+        loc_t = self._t(Omega, c10, j0, Dt, mu2)
+        loc_ym = self._ym(Omega, c10, j0, Dt, mu2, loc_t)
+        loc_yp = self._yp(Omega, c10, j0, Dt, mu2, loc_t)
+        c11 = self._c11(Omega, Dd, mu, ld)
+        loc_gsp = self._gsp(Omega, c10, c11, j0, Dt, mu2, loc_t, loc_yp)
+        loc_gsm = self._gsm(Omega, c10, c11, j0, Dt, mu2, loc_t, loc_ym)
+        loc_gcp = self._gcp(Omega, c10, j0, Dt, mu2, loc_t)
+        loc_gcm = self._gcm(Omega, c10, j0, Dt, mu2, loc_t)
+        N11 = self._N11(Omega, c10, j0, Dt, loc_t, loc_ym, loc_yp, loc_gcm, loc_gcp, loc_gsm, loc_gsp)
+        loc_bcs = self._bcs(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_ym, loc_yp)
+        loc_bsc = self._bsc(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_ym, loc_yp)
+        loc_q = self._q(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_p, loc_ym, loc_yp)
+        loc_alss = self._alss(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_p, loc_ym, loc_yp)
+        loc_alcc = self._alcc(Omega, c10, c11, j0, N11, Dt, mu2, loc_t, loc_p, loc_ym, loc_yp)
+        return self._n_Z(Omega, c10, Dt, loc_q, loc_ym, loc_yp, loc_alcc, loc_alss, loc_bsc, loc_bcs)
+
+    def _Ztotal_all(self):
+        j0 = self.fc.exper["forJ"]/self.fc.express["j_ref"]
+        c10 = 1.0 - self.fc.exper["forJ"]/self.fc.express["j_lim"]
+        n_Ztotal_v = [self._n_Ztotal(Omega, j0, c10) for Omega in self.Omega_v]
+        self.Z_v = [self.fc.fit["R_Ohm"]+n_z*self.fc.param["l_t"]/self.fc.fit["sigma_t"] for n_z in n_Ztotal_v]
+        return self.Z_v
 
 
 def main():
     scale = 10000.0
     import parameters as p
-    exper = {"gas_O"     : p.gas_O,
-             "T"         : p.T,
-             "R"         : p.R,
-             "F"         : p.F,
-             "c_ref"     : p.c_ref,
-             "forJ"      : 600.0,
-             "jfix"      : 600.0,
-             "lambdafix" : 3.0}
+    exper = {"gas_O"   : p.gas_O,
+             "T"       : p.T,
+             "R"       : p.R,
+             "F"       : p.F,
+             "c_ref"   : p.c_ref,
+             "forJ"    : 600.0,
+             "lam_exp" : 3.0}
 
     param = {"h"     : p.h,
              "l_d"   : p.l_d,
@@ -411,13 +575,13 @@ def main():
              "l_t"   : p.l_t,
              "l_m"   : p.l_m}
     fuel_cell = st.FCSimple(param, exper)
-    fuel_cell.fit = {"j_0"        : p.j_0,
-                     "R_Ohm"      : 0.000008,
-                     "b"          : p.b,
-                     "sigma_t"    : p.sigma_t,
-                     "Cdl"        : p.Cdl,
-                     "lambda_eff" : exper["lambdafix"],
-                     "D_O_GDL"    : p.D_O_GDL}
+    fuel_cell.fit = {"j_0"     : p.j_0,
+                     "R_Ohm"   : 0.000008,
+                     "b"       : p.b,
+                     "sigma_t" : p.sigma_t,
+                     "Cdl"     : p.Cdl,
+                     "lam_eff" : exper["lam_exp"],
+                     "D_O_GDL" : p.D_O_GDL}
     Omega_v = []
     om = 1.0e-5
     while om < 10.0:
@@ -427,7 +591,7 @@ def main():
     impedance.Omega_v = Omega_v
     found_Z = impedance.model_calc(impedance.fc.fit)
     impedance.freq_v = impedance.f_from_Omega(impedance.Omega_v)
-    filename = "results/I%.2f/transient-lambda%.2f.h5" % (impedance.fc.exper["forJ"]/scale, impedance.fc.express["lam"])
+    filename = "results/I%.2f/transient-lambda%.2f.h5" % (impedance.fc.exper["forJ"]/scale, impedance.fc.exper["lam_exp"])
     with tables.open_file(filename, "w") as r:
         impedance.dump_results(r, "found_")
 
@@ -455,7 +619,7 @@ def main():
     ax.axis("scaled")
     ax.set_xlim(*dim_x)
     ax.set_ylim(*dim_y)
-    fig.savefig("results/I%.2f/Nyquist%d.eps" % (impedance.fc.exper["forJ"]/scale, impedance.fc.express["lam"]))
+    fig.savefig("results/I%.2f/Nyquist%d.eps" % (impedance.fc.exper["forJ"]/scale, impedance.fc.exper["lam_exp"]))
 
 if __name__ == "__main__":
     main()

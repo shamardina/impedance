@@ -20,12 +20,12 @@ class Tafel(object):
 
     def eta(self):
         fc = self.fc
-        if fc.express["lam"] <= 1.0:
+        if fc.fit["lam_eff"] <= 1.0:
             print "Tafel overpotential NOT ok"
             self.eta_v = None
             return None
         print "Tafel overpotential ok"
-        f_lam_J = -fc.express["lJfix"]*math.log(1.0 - 1.0/fc.express["lam"])
+        f_lam_J = -fc.express["lJfix"]*math.log(1.0 - 1.0/fc.fit["lam_eff"])
         self.eta_v = fc.fit["b"]*(math.log(f_lam_J/fc.fit["j_0"]) - math.log(1.0 - f_lam_J/fc.express["j_lim"]))
         return self.eta_v
 
@@ -39,13 +39,13 @@ class Tafel(object):
         return True
 
     def j_profile(self, n_z):
-        return -self.fc.express["lJfix"]*((1.0 - 1.0/self.fc.express["lam"])**(n_z))*math.log(1.0 - 1.0/self.fc.express["lam"])
+        return -self.fc.express["lJfix"]*((1.0 - 1.0/self.fc.fit["lam_eff"])**(n_z))*math.log(1.0 - 1.0/self.fc.fit["lam_eff"])
 
     def c_h_profile(self, n_z):
-        return self.fc.exper["c_ref"]*((1.0 - 1.0/self.fc.express["lam"])**(n_z))
+        return self.fc.exper["c_ref"]*((1.0 - 1.0/self.fc.fit["lam_eff"])**(n_z))
 
     def c_t_profile(self, n_z):
-        return self.fc.exper["c_ref"]*((1.0 - 1.0/self.fc.express["lam"])**(n_z))*(1.0 + self.fc.express["lJfix"]/self.fc.express["j_lim"]*math.log(1.0 - 1.0/self.fc.express["lam"])) # == self.c_h_profile(n_z) - self.j_profile(n_z)*self.fc.exper["c_ref"]/self.fc.express["j_lim"]
+        return self.fc.exper["c_ref"]*((1.0 - 1.0/self.fc.fit["lam_eff"])**(n_z))*(1.0 + self.fc.express["lJfix"]/self.fc.express["j_lim"]*math.log(1.0 - 1.0/self.fc.fit["lam_eff"])) # == self.c_h_profile(n_z) - self.j_profile(n_z)*self.fc.exper["c_ref"]/self.fc.express["j_lim"]
 
     def dump_results(self, h5, prefix=""):
         method = self.__class__.__name__
@@ -103,15 +103,12 @@ class FCSimple(object):
                              "epsilon2"    : p["sigma_t"]*p["b"]/2.0/p["j_0"]/p["l_t"],
                              "xi2epsilon2" : 4.0*p["F"]*p["h"]*p["c_ref"]/p["Cdl"]/p["b"]/p["l_t"],
                              "j_lim"       : 4.0*p["F"]*p["D_O_GDL"]*p["c_ref"]/p["l_d"],
-                             "nj_lim"      : 4.0*p["F"]*p["D_O_GDL"]*p["c_ref"]*p["l_t"]/p["l_d"]/p["sigma_t"]/p["b"]})
+                             "nj_lim"      : 4.0*p["F"]*p["D_O_GDL"]*p["c_ref"]*p["l_t"]/p["l_d"]/p["sigma_t"]/p["b"],
+                             "lJfix"       : p["lam_eff"]*p["forJ"]})
 
     def find_params(self):
         """Basic parameters: finds extra parameters from initial conditions and parameters. Call once."""
-        e = self.exper
-        p = self.param
-        self.express.update({"nl_d"  : p["l_d"]/p["l_t"],
-                             "lam"   : e["lambdafix"]*e["jfix"]/e["forJ"],
-                             "lJfix" : e["lambdafix"]*e["jfix"]})
+        self.express["nl_d"] = self.param["l_d"]/self.param["l_t"]
 
     def find_opt(self):
         """Finds optional properties. Call once."""
@@ -134,7 +131,7 @@ class FCSimple(object):
 
     def find_pparams(self):
         """Dimensionless parameters: finds extra parameters from initial conditions and parameters. Call once."""
-        self.express["lJfix"] = self.exper["forJ"]*self.express["lam"]
+        self.express["lJfix"] = self.exper["forJ"]*self.fit["lam_eff"]
 
     def dump_vars(self, h5, prefix=""):
         s = {"exper"   : [self.exper, prefix+"conditions", "Experiment conditions"],
@@ -147,7 +144,7 @@ class FCSimple(object):
                 setattr(gr._v_attrs, "%s" % k1, v1)
 
     def read_fit(self, h5, prefix=""):
-        keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lambda_eff"]
+        keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lam_eff"]
         gr = h5.get_node("/%s" % (prefix+"performance"))
         for k in keys:
             self.fit[k] = getattr(gr._v_attrs, k)
@@ -158,13 +155,60 @@ class FCCCL(FCSimple):
 
     def find_vars(self):
         FCSimple.find_vars(self)
-        self.express["nD_t"] = 4.0*self.exper["F"]*self.fit["D_t"]*self.exper["c_ref"]/self.fit["sigma_t"]/self.fit["b"]
+        self.express["nD_t"] = 4.0*self.exper["F"]*self.fit["D_O_CCL"]*self.exper["c_ref"]/self.fit["sigma_t"]/self.fit["b"]
 
     def find_vvars(self):
         FCSimple.find_vvars(self)
-        self.fit["D_t"] = self.express["nD_t"]*self.fit["sigma_t"]*self.fit["b"]/4.0/self.exper["F"]/self.exper["c_ref"]
+        self.fit["D_O_CCL"] = self.express["nD_t"]*self.fit["sigma_t"]*self.fit["b"]/4.0/self.exper["F"]/self.exper["c_ref"]
 
     def read_fit(self, h5, prefix=""):
         FCSimple.read_fit(self, h5, prefix)
         gr = h5.get_node("/%s" % (prefix+"performance"))
-        self.fit["D_t"] = gr._v_attrs.D_t
+        self.fit["D_O_CCL"] = gr._v_attrs.D_O_CCL
+
+
+def main():
+    scale = 10000.0
+    import parameters as p
+    exper = {"gas_O"   : p.gas_O,
+             "T"       : p.T,
+             "R"       : p.R,
+             "F"       : p.F,
+             "c_ref"   : p.c_ref,
+             "forJ"    : 600.0,
+             "lam_exp" : 300.0}
+
+    param = {"h"     : p.h,
+             "l_d"   : p.l_d,
+             "sigma" : p.sigma,
+             "l_t"   : p.l_t,
+             "l_m"   : p.l_m}
+    fuel_cell = FCSimple(param, exper)
+    fuel_cell.fit = {"j_0"     : p.j_0,
+                     "R_Ohm"   : 0.000008,
+                     "b"       : p.b,
+                     "sigma_t" : p.sigma_t,
+                     "Cdl"     : p.Cdl,
+                     "lam_eff" : exper["lam_exp"],
+                     "D_O_GDL" : p.D_O_GDL,
+                     "D_O_CCL" : p.D_O_GDL/10.0}
+    filename = "results/newSTsimple.h5"
+#    with tables.open_file(filename, "w") as r:
+#        fuel_cell.dump_vars(r, "found_")
+    t = tables.open_file(filename, "w")
+    fuel_cell.dump_vars(t, "found_")
+    #temp = FCSimple()
+    #temp.read_fit(t, "found_")
+    #t.close()
+    print ["%s=%s" % (k, fuel_cell.fit[k]) for k in sorted(fuel_cell.fit.keys())]
+    #print ["%s=%s" % (k, temp.fit[k]) for k in sorted(temp.fit.keys())]
+    fuel_cell.find_vars()
+    fuel_cell.find_params()
+    tafel = Tafel(fuel_cell)
+    tafel.profiles_v(1.0)
+    tafel.dump_results(t, "found_")
+    t.close()
+
+
+if __name__ == "__main__":
+    main()

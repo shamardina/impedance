@@ -32,7 +32,7 @@ Cdl = 1000.0/l_t                   # F/m^3
 sigma_t = 5.0                      # S/m
 epsilon_GDL_gas = 0.7
 D_O_GDL = D_O*epsilon_GDL_gas**1.5 # m^2/s
-
+D_O_CCL = D_O_GDL # m^2/s
 
 def alpha(b):
     """Transfer coefficient of the oxygen reduction reaction."""

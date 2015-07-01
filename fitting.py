@@ -7,6 +7,8 @@ import stationarylib as st
 import parameters as p
 
 default_channels = 100
+default_keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lam_eff"]
+keys_K2015   = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "D_O_CCL", "Cdl", "lam_eff"]
 
 exper = {"gas_O"     : p.gas_O,
          "T"         : p.T,
@@ -32,16 +34,17 @@ for i in xrange(0, len(Js)):
                   "jfix"      : Js[i]})
     fuel_cell = st.FCSimple(param, exper)
     impedance = tr.ImpCCLFastO2(fuel_cell, default_channels, num_method=1)
-    filename = "results/I%.2f/new-transient-fitting-lambda%.2f.h5" % (Js[i]/scale, lams[i])
+    keys = default_keys
     r_calc = impedance.read_experiment("data/%.1fA-%dml.dat" % (Is[i], int(flows[i])), area, scale)
     impedance.freq_v = impedance.exp_freq_v
     rest = {"j_0": p.j_0, "R_Ohm": r_calc}
-    fit = {"b": p.b, "sigma_t": p.sigma_t, "Cdl": p.Cdl, "lambda_eff": lams[i], "D_O_GDL": p.D_O_GDL}
-    result = tr.leastsqFC(impedance.residuals, fit, rest)
+    fit = {"b": p.b, "Cdl": p.Cdl, "D_O_GDL": p.D_O_GDL, "sigma_t": p.sigma_t, "lam_eff": lams[i]}#, "D_O_CCL": p.D_O_CCL}
+    result = impedance.leastsqFC(impedance.residuals, fit, rest, keys)
     print result[0]
 
-    # Dump results to HDF5:    
-    found = impedance.param_parse(result[0], rest)
+    # Dump results to HDF5:
+    filename = "results/I%.2f/new-transient-fitting-lambda%.2f.h5" % (Js[i]/scale, lams[i])
+    found = impedance.fit_parse(result[0], rest, keys)
     found_Z = impedance.model_fit(found)
     impedance.fc.find_opt()
     print "found alpha =", impedance.fc.express["alpha"]
