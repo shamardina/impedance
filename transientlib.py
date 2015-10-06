@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 # constant flow velocity
 
@@ -10,9 +11,9 @@ import tables
 import stationarylib as st
 from parameters import eff_zero, eff_inf
 
-default_channels = 1000
+default_channels = 100
 default_keys = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "Cdl", "lam_eff"]
-keys_K2015   = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "D_O_CCL", "Cdl", "lam_eff"]
+keys_K2015   = ["b", "j_0", "R_Ohm", "sigma_t", "D_O_GDL", "D_O_CCL", "Cdl"]
 
 
 def error(Z1, Z2):
